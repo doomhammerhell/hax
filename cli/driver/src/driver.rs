@@ -41,7 +41,7 @@ use callbacks_wrapper::*;
 use features::*;
 
 use const_format::formatcp;
-use hax_cli_options::{Command, ENV_VAR_OPTIONS_FRONTEND};
+use hax_cli_options::{Options, RustcCommand, ENV_VAR_OPTIONS_FRONTEND};
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::{interface, Queries};
@@ -76,7 +76,7 @@ fn setup_logging() {
 fn main() {
     setup_logging();
 
-    let options: hax_cli_options::Options =
+    let options: Options<RustcCommand> =
         serde_json::from_str(&std::env::var(ENV_VAR_OPTIONS_FRONTEND).expect(&formatcp!(
             "Cannot find environnement variable {}",
             ENV_VAR_OPTIONS_FRONTEND
@@ -111,21 +111,17 @@ fn main() {
     let translate_package = !is_build_script && (options.deps || is_primary_package);
     let mut callbacks: Box<dyn Callbacks + Send> = if translate_package {
         match &options.command {
-            Some(Command::ExporterCommand(command)) => Box::new(exporter::ExtractionCallbacks {
+            RustcCommand::ExporterCommand(command) => Box::new(exporter::ExtractionCallbacks {
                 inline_macro_calls: options.inline_macro_calls.clone(),
                 command: command.clone(),
                 macro_calls: std::collections::HashMap::new(),
             }),
-            Some(Command::LintCommand(command)) => {
+            RustcCommand::LintCommand(command) => {
                 let ltype = match command {
                     hax_cli_options::LinterCommand::Hacspec => Type::Hacspec,
                     hax_cli_options::LinterCommand::Rust => Type::Rust,
                 };
                 Box::new(LinterCallbacks::new(ltype))
-            }
-            None => {
-                // hacspec lint
-                Box::new(LinterCallbacks::new(Type::Rust))
             }
         }
     } else {
@@ -160,7 +156,7 @@ fn main() {
 
     let mut callbacks = CallbacksWrapper {
         sub: &mut *callbacks,
-        options: hax_cli_options::Options {
+        options: Options {
             force_cargo_build: if translate_package {
                 options.force_cargo_build
             } else {
