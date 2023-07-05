@@ -1,5 +1,5 @@
 use const_format::formatcp;
-use hax_cli_options::{Command, ENV_VAR_OPTIONS_FRONTEND};
+use hax_cli_options::{Options, RustcCommand, ENV_VAR_OPTIONS_FRONTEND};
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::{interface, Queries};
@@ -9,7 +9,7 @@ use rustc_span::symbol::Symbol;
 /// configuration in the `config` phase of rustc
 pub struct CallbacksWrapper<'a> {
     pub sub: &'a mut (dyn Callbacks + Send + 'a),
-    pub options: hax_cli_options::Options,
+    pub options: Options<RustcCommand>,
 }
 impl<'a> Callbacks for CallbacksWrapper<'a> {
     fn config(&mut self, config: &mut interface::Config) {
