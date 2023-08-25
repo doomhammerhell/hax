@@ -113,7 +113,7 @@ impl NormalizePaths for PathOrDash {
     }
 }
 
-#[derive(JsonSchema, Parser, Debug, Clone, Serialize, Deserialize)]
+#[derive(JsonSchema, Parser, Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct FStarOptions {
     /// Set the Z3 per-query resource limit
     #[arg(long, default_value = "15")]
@@ -126,7 +126,7 @@ pub struct FStarOptions {
     ifuel: u32,
 }
 
-#[derive(JsonSchema, Subcommand, Debug, Clone, Serialize, Deserialize)]
+#[derive(JsonSchema, Subcommand, Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Backend {
     /// Use the F* backend
     Fstar(FStarOptions),
@@ -299,6 +299,17 @@ pub enum RustcCommand {
     /// Lint the code
     #[clap(subcommand, name = "lint")]
     LintCommand(LinterCommand),
+}
+
+impl RustcCommand {
+    pub fn backend(&self) -> Option<Backend> {
+        match self {
+            RustcCommand::ExporterCommand(ExporterCommand::Backend(options)) => {
+                Some(options.backend)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(JsonSchema, Subcommand, Debug, Clone, Serialize, Deserialize)]
