@@ -47,6 +47,8 @@ use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::{interface, Queries};
 use rustc_span::symbol::Symbol;
 
+use std::collections::HashMap;
+
 fn rustc_sysroot() -> String {
     std::process::Command::new("rustc")
         .args(["--print", "sysroot"])
@@ -106,9 +108,11 @@ fn main() {
 
     // fetch the correct callback structure given the command, and
     // coerce options
-    let is_primary_package = std::env::var("CARGO_PRIMARY_PACKAGE").is_ok();
-    let is_build_script = std::env::var("CARGO_CRATE_NAME") == Ok("build_script_build".to_string()); // FIXME: is there a more robust way to do this?
-    let translate_package = !is_build_script && (options.deps || is_primary_package);
+    let targets: HashMap<String, String> =
+        serde_json::from_str(&std::env::var("HAX_TARGETS").unwrap()).unwrap();
+    let translate_package = std::env::var("CARGO_PKG_NAME")
+        .map(|name| targets.contains_key(&name))
+        .unwrap_or(false);
     let mut callbacks: Box<dyn Callbacks + Send> = if translate_package {
         match &options.command {
             RustcCommand::ExporterCommand(command) => Box::new(exporter::ExtractionCallbacks {

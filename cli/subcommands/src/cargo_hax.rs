@@ -4,6 +4,8 @@ use clap::Parser;
 use colored::Colorize;
 use hax_cli_options::{Command, NormalizePaths, Options, RustcCommand};
 
+use std::collections::HashMap;
+
 /// Return a toolchain argument to pass to [cargo]: when the correct nightly is
 /// already present, this is None, otherwise we (1) ensure [rustup] is available
 /// (2) install the nightly (3) return the toolchain
@@ -67,6 +69,69 @@ fn cargo_build(options: &Options<RustcCommand>) -> std::process::Command {
     cmd
 }
 
+#[derive(Debug)]
+struct BuildPlanInvocation {
+    name: String,
+    primary: bool,
+    metadata: serde_json::Value,
+}
+
+impl BuildPlanInvocation {
+    fn new(p: &serde_json::Value, m: &cargo_metadata::Metadata) -> Self {
+        let name = p["package_name"].as_str().unwrap().to_string();
+        let primary = p["env"]
+            .as_object()
+            .unwrap()
+            .contains_key("CARGO_PRIMARY_PACKAGE");
+        let metadata = m
+            .packages
+            .iter()
+            .find(|p| p.name == name) // FIXME: better filter?
+            .unwrap()
+            .metadata
+            .clone();
+        Self {
+            name,
+            primary,
+            metadata,
+        }
+    }
+
+    fn sel(&self, deps: bool) -> bool {
+        let metadata_hax = self
+            .metadata
+            .as_object()
+            .map(|m| m.contains_key("hax"))
+            .unwrap_or(false);
+        self.primary || (metadata_hax && deps)
+    }
+}
+
+fn build_plan(options: &Options<RustcCommand>) -> Vec<BuildPlanInvocation> {
+    let mut cmd = cargo_build(options);
+    cmd.args([
+        "-Z".to_string(),
+        "unstable-options".to_string(),
+        "--build-plan".to_string(),
+    ]);
+    let output = cmd.output().unwrap();
+    let build_plan: serde_json::Value = serde_json::from_slice(&output.stdout[..]).unwrap();
+    let metadata = cargo_metadata::MetadataCommand::new().exec().unwrap();
+    build_plan["invocations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|v| {
+            v["target_kind"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|v| v.as_str().unwrap() != "custom-build")
+        })
+        .map(|p| BuildPlanInvocation::new(p, &metadata))
+        .collect()
+}
+
 fn main() {
     let args: Vec<String> = get_args("hax");
     let options: Options<Command> = Options::parse_from(args.iter()).normalize_paths();
@@ -76,7 +141,7 @@ fn main() {
             let options: Options<RustcCommand> = Options { command, ..options };
             let mut cmd = cargo_build(&options);
             cmd.env(
-                "RUSTC_WORKSPACE_WRAPPER",
+                "RUSTC_WRAPPER",
                 std::env::var("HAX_RUSTC_DRIVER_BINARY")
                     .unwrap_or("driver-hax-frontend-exporter".into()),
             );
@@ -84,14 +149,33 @@ fn main() {
                 hax_cli_options::ENV_VAR_OPTIONS_FRONTEND,
                 serde_json::to_string(&options)
                     .expect("Options could not be converted to a JSON string"),
-            )
-            .env("RUST_LOG_STYLE", rust_log_style())
-            .env(
-                hax_cli_options::ENV_VAR_OPTIONS_FRONTEND,
-                serde_json::to_string(&options)
-                    .expect("Options could not be converted to a JSON string"),
             );
-            std::process::exit(cmd.spawn().unwrap().wait().unwrap().code().unwrap_or(254))
+            cmd.env("RUST_LOG_STYLE", rust_log_style());
+
+            if let Some(backend) = options.command.backend() {
+                let target_dir = std::env::var("CARGO_TARGET_DIR")
+                    .map(|dir| std::path::PathBuf::new().join(&dir))
+                    .unwrap_or(std::env::current_dir().unwrap().join("target"));
+                let targets: HashMap<String, String> = build_plan(&options)
+                    .into_iter()
+                    .filter(|invocation| invocation.sel(options.deps))
+                    .map(|invocation| {
+                        let path = target_dir
+                            .clone()
+                            .join("hax")
+                            .join(format!("{}", backend))
+                            .join(&invocation.name)
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        (invocation.name, path)
+                    })
+                    .collect();
+                cmd.env("HAX_TARGETS", serde_json::to_string(&targets).unwrap());
+                cmd.env("CARGO_TARGET_DIR", target_dir);
+            }
+
+            std::process::exit(cmd.spawn().unwrap().wait().unwrap().code().unwrap_or(255));
         }
         Command::CheckCommand(_backend) => {
             todo!()
