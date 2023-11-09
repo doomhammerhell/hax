@@ -79,13 +79,13 @@ fn cargo_build(options: &Options<RustcCommand>) -> std::process::Command {
 }
 
 #[derive(Debug)]
-struct BuildPlanInvocation {
+struct PackageInfo {
     name: String,
     primary: bool,
     metadata: serde_json::Value,
 }
 
-impl BuildPlanInvocation {
+impl PackageInfo {
     fn new(p: &serde_json::Value, m: &cargo_metadata::Metadata) -> Self {
         let name = p["package_name"].as_str().unwrap().to_string();
         let primary = p["env"]
@@ -114,31 +114,31 @@ impl BuildPlanInvocation {
             .unwrap_or(false);
         self.primary || (metadata_hax && deps)
     }
-}
 
-fn build_plan(options: &Options<RustcCommand>) -> Vec<BuildPlanInvocation> {
-    let mut cmd = cargo_build(options);
-    cmd.args([
-        "-Z".to_string(),
-        "unstable-options".to_string(),
-        "--build-plan".to_string(),
-    ]);
-    let output = cmd.output().unwrap();
-    let build_plan: serde_json::Value = serde_json::from_slice(&output.stdout[..]).unwrap();
-    let metadata = cargo_metadata::MetadataCommand::new().exec().unwrap();
-    build_plan["invocations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|v| {
-            v["target_kind"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|v| v.as_str().unwrap() != "custom-build")
-        })
-        .map(|p| BuildPlanInvocation::new(p, &metadata))
-        .collect()
+    fn list(options: &Options<RustcCommand>) -> Vec<PackageInfo> {
+        let mut cmd = cargo_build(options);
+        cmd.args([
+            "-Z".to_string(),
+            "unstable-options".to_string(),
+            "--build-plan".to_string(),
+        ]);
+        let output = cmd.output().unwrap();
+        let build_plan: serde_json::Value = serde_json::from_slice(&output.stdout[..]).unwrap();
+        let metadata = cargo_metadata::MetadataCommand::new().exec().unwrap();
+        build_plan["invocations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| {
+                v["target_kind"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|v| v.as_str().unwrap() != "custom-build")
+            })
+            .map(|p| PackageInfo::new(p, &metadata))
+            .collect()
+    }
 }
 
 fn main() {
@@ -164,10 +164,11 @@ fn main() {
             cmd.env(RUSTFLAGS, rustflags());
 
             if let Some(backend) = options.command.backend() {
+                // TODO: call cargo metadata to get target_dir
                 let target_dir = std::env::var("CARGO_TARGET_DIR")
                     .map(|dir| std::path::PathBuf::new().join(&dir))
                     .unwrap_or(std::env::current_dir().unwrap().join("target"));
-                let targets: HashMap<String, String> = build_plan(&options)
+                let targets: HashMap<String, String> = PackageInfo::list(&options)
                     .into_iter()
                     .filter(|invocation| invocation.sel(options.deps))
                     .map(|invocation| {
